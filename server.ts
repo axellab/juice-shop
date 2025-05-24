@@ -67,6 +67,7 @@ import { login } from './routes/login'
 import * as verify from './routes/verify'
 import * as address from './routes/address'
 import * as chatbot from './routes/chatbot'
+import * as chaos from './routes/chaos'
 import * as metrics from './routes/metrics'
 import * as payment from './routes/payment'
 import { placeOrder } from './routes/order'
@@ -647,6 +648,10 @@ restoreOverwrittenFilesWithOriginals().then(() => {
   app.post('/snippets/verdict', checkVulnLines())
   app.get('/snippets/fixes/:key', serveCodeFixes())
   app.post('/snippets/fixes', checkCorrectFix())
+
+  /* Chaos Engineering routes */
+  app.use('/api/chaos', security.isAuthorized(), security.isAdmin(), chaos.listExperiments())
+  app.use('/api/chaos/:name', security.isAuthorized(), security.isAdmin(), chaos.runExperiment())
 
   app.use(serveAngularClient())
 
