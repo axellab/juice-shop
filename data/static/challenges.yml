@@ -1257,3 +1257,15 @@
   key: exposedCredentialsChallenge
   tutorial:
     order: 6
+-
+  name: 'Chaos Experiment'
+  category: 'Broken Anti Automation'
+  tags:
+    - Good for Demos
+    - Shenanigans
+  description: 'Perform a chaos experiment by triggering a CPU-intensive calculation that stresses the system resources.'
+  difficulty: 3
+  hint: 'Monkeys cause chaos. The chaos endpoint with the right query parameter will help you unleash the inner chaos monkey.'
+  hintUrl: ''
+  mitigationUrl: 'https://principlesofchaos.org/'
+  key: chaosExperimentChallenge
