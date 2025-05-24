@@ -737,3 +737,32 @@ ctf:
         type: string
       code:
         type: string
+chaos:
+  enabled:
+    type: boolean
+  gremlin:
+    teamId:
+      type: string
+    apiKey:
+      type: string
+    apiUrl:
+      type: string
+  experiments:
+    type: array
+    items:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        duration:
+          type: number
+        targetService:
+          type: string
+        type:
+          type: string
+        args:
+          type: object
