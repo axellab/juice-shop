@@ -28,7 +28,7 @@ export function triggerChaosExperiment () {
           // This is intentionally inefficient to simulate CPU load
           fibonacci(40)
         } catch (err) {
-          console.error(`Error during chaos experiment: ${err}`)
+          console.error(`Error during chaos experiment: ${String(err)}`)
         }
       }, 1)
       
