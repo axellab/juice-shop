@@ -124,6 +124,7 @@ import { orderHistory, allOrders, toggleDeliveryStatus } from './routes/orderHis
 import { continueCode, continueCodeFindIt, continueCodeFixIt } from './routes/continueCode'
 import { serveChallengesWithCodeSnippet, serveCodeSnippet, checkVulnLines } from './routes/vulnCodeSnippet'
 import { ensureFileIsPassed, handleZipFileUpload, checkUploadSize, checkFileType, handleXmlUpload, handleYamlUpload } from './routes/fileUpload'
+import { triggerChaosExperiment } from './routes/chaos'
 
 const app = express()
 const server = new http.Server(app)
@@ -585,6 +586,7 @@ restoreOverwrittenFilesWithOriginals().then(() => {
   app.get('/rest/continue-code', continueCode())
   app.get('/rest/continue-code-findIt', continueCodeFindIt())
   app.get('/rest/continue-code-fixIt', continueCodeFixIt())
+  app.get('/rest/chaos-monkey/experiment', triggerChaosExperiment())
   app.put('/rest/continue-code-findIt/apply/:continueCode', restoreProgress.restoreProgressFindIt())
   app.put('/rest/continue-code-fixIt/apply/:continueCode', restoreProgress.restoreProgressFixIt())
   app.put('/rest/continue-code/apply/:continueCode', restoreProgress.restoreProgress())
