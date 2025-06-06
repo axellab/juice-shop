@@ -1,0 +1,170 @@
+{
+  "paymentService": {
+    "port": 3001,
+    "host": "localhost",
+    "environment": "development",
+    "cors": {
+      "origins": [
+        "http://localhost:3000",
+        "http://localhost:4200"
+      ],
+      "credentials": true
+    },
+    "security": {
+      "requestSizeLimit": "10mb",
+      "enableRateLimit": true,
+      "rateLimitWindowMs": 900000,
+      "rateLimitMax": 100
+    }
+  },
+  "paymentProviders": {
+    "creditCard": {
+      "enabled": true,
+      "name": "Credit Card Processor",
+      "successRate": 0.90,
+      "processingTimeMs": {
+        "min": 1000,
+        "max": 5000
+      },
+      "supportedCardTypes": [
+        "visa",
+        "mastercard",
+        "amex",
+        "discover"
+      ]
+    },
+    "paypal": {
+      "enabled": true,
+      "name": "PayPal",
+      "successRate": 0.92,
+      "processingTimeMs": {
+        "min": 2000,
+        "max": 8000
+      },
+      "sandbox": true,
+      "webhookUrl": "/webhooks/paypal"
+    },
+    "stripe": {
+      "enabled": true,
+      "name": "Stripe",
+      "successRate": 0.94,
+      "processingTimeMs": {
+        "min": 800,
+        "max": 3000
+      },
+      "sandbox": true,
+      "webhookUrl": "/webhooks/stripe"
+    },
+    "wallet": {
+      "enabled": true,
+      "name": "Juice Shop Wallet",
+      "defaultCurrency": "USD",
+      "maximumBalance": 10000,
+      "minimumCharge": 1,
+      "chargeSuccessRate": 0.95
+    }
+  },
+  "transaction": {
+    "defaultCurrency": "USD",
+    "supportedCurrencies": [
+      "USD",
+      "EUR",
+      "GBP",
+      "JPY",
+      "CAD",
+      "AUD"
+    ],
+    "minimumAmount": 0.01,
+    "maximumAmount": 10000,
+    "timeoutMs": 30000,
+    "retryAttempts": 3,
+    "retryDelayMs": 1000
+  },
+  "refunds": {
+    "enabled": true,
+    "maximumRefundDays": 30,
+    "processingTimeMs": {
+      "min": 1000,
+      "max": 5000
+    },
+    "partialRefundsAllowed": true
+  },
+  "validation": {
+    "cardNumber": {
+      "minLength": 13,
+      "maxLength": 19,
+      "luhnCheck": true
+    },
+    "cvv": {
+      "minLength": 3,
+      "maxLength": 4
+    },
+    "expiryValidation": true
+  },
+  "logging": {
+    "level": "info",
+    "enableRequestLogging": true,
+    "enableErrorLogging": true,
+    "logPaymentDetails": false,
+    "logSensitiveData": false
+  },
+  "monitoring": {
+    "healthCheck": {
+      "enabled": true,
+      "endpoint": "/health"
+    },
+    "metrics": {
+      "enabled": true,
+      "endpoint": "/metrics"
+    },
+    "alerts": {
+      "failureRateThreshold": 0.1,
+      "responseTimeThreshold": 10000
+    }
+  },
+  "integration": {
+    "juiceShop": {
+      "baseUrl": "http://localhost:3000",
+      "apiKey": "juice-shop-api-key",
+      "webhooks": {
+        "paymentCompleted": "/api/payments/webhook/completed",
+        "paymentFailed": "/api/payments/webhook/failed",
+        "refundProcessed": "/api/payments/webhook/refund"
+      }
+    }
+  },
+  "features": {
+    "tokenization": {
+      "enabled": true,
+      "tokenExpiryDays": 365
+    },
+    "fraudDetection": {
+      "enabled": true,
+      "velocityChecks": true,
+      "amountThresholds": true,
+      "geoLocationChecks": false
+    },
+    "subscriptions": {
+      "enabled": false,
+      "supportedIntervals": ["monthly", "yearly"]
+    },
+    "multiCurrency": {
+      "enabled": true,
+      "autoConversion": false,
+      "conversionService": "none"
+    }
+  },
+  "database": {
+    "type": "memory",
+    "persistence": false,
+    "backup": {
+      "enabled": false,
+      "intervalMinutes": 60
+    }
+  },
+  "cache": {
+    "enabled": true,
+    "ttlSeconds": 300,
+    "maxSize": 1000
+  }
+}
