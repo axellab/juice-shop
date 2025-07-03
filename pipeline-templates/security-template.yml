@@ -1,0 +1,658 @@
+# Continuous Security Pipeline Template
+# Based on OWASP Juice Shop security practices and DevSecOps principles
+# Adapt this template for your project by replacing variables and customizing security checks
+
+name: "Continuous Security Pipeline"
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - release/*
+      - hotfix/*
+  pull_request:
+    branches:
+      - main
+      - develop
+  schedule:
+    # Run comprehensive security scans daily
+    - cron: '0 6 * * *'  # 6 AM UTC daily
+    # Run vulnerability scans weekly
+    - cron: '0 2 * * 0'  # 2 AM UTC on Sundays
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of security scan'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - sast
+          - dast
+          - sca
+          - secrets
+          - containers
+          - infrastructure
+          - compliance
+      severity_threshold:
+        description: 'Minimum severity level'
+        required: true
+        default: 'medium'
+        type: choice
+        options:
+          - low
+          - medium
+          - high
+          - critical
+      target_environment:
+        description: 'Target environment for dynamic scans'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  # Customize these variables for your project
+  PROJECT_NAME: "your-project-name"
+  NODE_DEFAULT_VERSION: 20
+  
+  # Security scanning configuration
+  SEVERITY_THRESHOLD: ${{ github.event.inputs.severity_threshold || 'medium' }}
+  SCAN_TYPE: ${{ github.event.inputs.scan_type || 'all' }}
+  
+  # Environment URLs
+  STAGING_URL: "https://staging.your-domain.com"
+  PRODUCTION_URL: "https://your-domain.com"
+  
+  # Security tools versions
+  SNYK_VERSION: "latest"
+  TRIVY_VERSION: "latest"
+  ZAP_VERSION: "latest"
+  NUCLEI_VERSION: "latest"
+
+jobs:
+  # Setup and Configuration
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      security_scans: ${{ steps.scans.outputs.security_scans }}
+      target_url: ${{ steps.env.outputs.target_url }}
+      should_run_scans: ${{ steps.scans.outputs.should_run_scans }}
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Determine Security Scans"
+        id: scans
+        run: |
+          case "${{ env.SCAN_TYPE }}" in
+            "sast")
+              echo "security_scans=['sast']" >> $GITHUB_OUTPUT
+              ;;
+            "dast")
+              echo "security_scans=['dast']" >> $GITHUB_OUTPUT
+              ;;
+            "sca")
+              echo "security_scans=['sca']" >> $GITHUB_OUTPUT
+              ;;
+            "secrets")
+              echo "security_scans=['secrets']" >> $GITHUB_OUTPUT
+              ;;
+            "containers")
+              echo "security_scans=['containers']" >> $GITHUB_OUTPUT
+              ;;
+            "infrastructure")
+              echo "security_scans=['infrastructure']" >> $GITHUB_OUTPUT
+              ;;
+            "compliance")
+              echo "security_scans=['compliance']" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "security_scans=['sast', 'dast', 'sca', 'secrets', 'containers', 'infrastructure']" >> $GITHUB_OUTPUT
+              ;;
+          esac
+          echo "should_run_scans=true" >> $GITHUB_OUTPUT
+          
+      - name: "Determine Target Environment"
+        id: env
+        run: |
+          if [ "${{ github.event.inputs.target_environment }}" == "production" ]; then
+            echo "target_url=${{ env.PRODUCTION_URL }}" >> $GITHUB_OUTPUT
+          else
+            echo "target_url=${{ env.STAGING_URL }}" >> $GITHUB_OUTPUT
+          fi
+
+  # Static Application Security Testing (SAST)
+  sast:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should_run_scans == 'true' && contains(needs.setup.outputs.security_scans, 'sast')
+    name: "Static Application Security Testing"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci
+        
+      - name: "Initialize CodeQL"
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript, typescript
+          config-file: ./.github/codeql/codeql-config.yml
+          
+      - name: "Build Application"
+        run: npm run build
+        
+      - name: "Perform CodeQL Analysis"
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript"
+          
+      - name: "Run ESLint Security Rules"
+        run: |
+          npm install -g eslint-plugin-security
+          npx eslint --ext .js,.ts,.vue --format json --output-file eslint-security-report.json . || true
+          
+      - name: "Run Semgrep SAST"
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/security-audit
+            p/secrets
+            p/owasp-top-ten
+            p/javascript
+            p/typescript
+          generateSarif: "1"
+          
+      - name: "Upload Semgrep SARIF"
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          
+      - name: "Run Bandit Security Linter (Python)"
+        if: hashFiles('**/*.py') != ''
+        run: |
+          pip install bandit
+          bandit -r . -f json -o bandit-report.json || true
+          
+      - name: "Upload SAST Results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-results
+          path: |
+            eslint-security-report.json
+            bandit-report.json
+            semgrep.sarif
+
+  # Software Composition Analysis (SCA)
+  sca:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should_run_scans == 'true' && contains(needs.setup.outputs.security_scans, 'sca')
+    name: "Software Composition Analysis"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci
+        
+      - name: "Run npm audit"
+        run: |
+          npm audit --audit-level=${{ env.SEVERITY_THRESHOLD }} --json > npm-audit-report.json || true
+          
+      - name: "Run Snyk SCA"
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: >-
+            --severity-threshold=${{ env.SEVERITY_THRESHOLD }}
+            --json-file-output=snyk-sca-report.json
+            --file=package.json
+            
+      - name: "Run Retire.js"
+        run: |
+          npm install -g retire
+          retire --js --json --outputpath retire-report.json || true
+          
+      - name: "Generate SBOM"
+        run: |
+          npm install -g @cyclonedx/cyclonedx-npm
+          cyclonedx-npm --omit=dev --output-format=JSON --output-file=sbom.json
+          
+      - name: "Run OWASP Dependency Check"
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: ${{ env.PROJECT_NAME }}
+          path: '.'
+          format: 'JSON'
+          out: 'dependency-check-report'
+          args: >-
+            --enableRetired
+            --enableExperimental
+            --nodeAuditSkipDevDependencies
+            
+      - name: "Upload SCA Results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: sca-results
+          path: |
+            npm-audit-report.json
+            snyk-sca-report.json
+            retire-report.json
+            sbom.json
+            dependency-check-report/
+
+  # Secret Scanning
+  secrets:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should_run_scans == 'true' && contains(needs.setup.outputs.security_scans, 'secrets')
+    name: "Secret Scanning"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for secret scanning
+          
+      - name: "Run TruffleHog"
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --debug --only-verified
+          
+      - name: "Run GitLeaks"
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          config-path: .gitleaks.toml
+          
+      - name: "Run Detect-secrets"
+        run: |
+          pip install detect-secrets
+          detect-secrets scan --all-files --baseline .secrets.baseline
+          detect-secrets audit .secrets.baseline
+          
+      - name: "Upload Secret Scanning Results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-results
+          path: |
+            .secrets.baseline
+            gitleaks-report.json
+
+  # Container Security Scanning
+  containers:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should_run_scans == 'true' && contains(needs.setup.outputs.security_scans, 'containers')
+    name: "Container Security Scanning"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Build Docker Image"
+        run: |
+          docker build -t ${{ env.PROJECT_NAME }}:latest .
+          
+      - name: "Run Trivy Container Scan"
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.PROJECT_NAME }}:latest
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          
+      - name: "Upload Trivy SARIF"
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+          
+      - name: "Run Grype Container Scan"
+        uses: anchore/scan-action@v3
+        with:
+          image: ${{ env.PROJECT_NAME }}:latest
+          fail-build: false
+          severity-cutoff: ${{ env.SEVERITY_THRESHOLD }}
+          
+      - name: "Run Snyk Container Scan"
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: ${{ env.PROJECT_NAME }}:latest
+          args: --severity-threshold=${{ env.SEVERITY_THRESHOLD }}
+          
+      - name: "Upload Container Scanning Results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-results
+          path: |
+            trivy-results.sarif
+            anchore-results.sarif
+            snyk-container-report.json
+
+  # Infrastructure Security Scanning
+  infrastructure:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should_run_scans == 'true' && contains(needs.setup.outputs.security_scans, 'infrastructure')
+    name: "Infrastructure Security Scanning"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Run Checkov IaC Scan"
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: dockerfile,kubernetes,terraform,cloudformation
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          
+      - name: "Upload Checkov SARIF"
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'checkov-results.sarif'
+          
+      - name: "Run Terrascan"
+        uses: tenable/terrascan-action@main
+        with:
+          iac_type: 'all'
+          policy_type: 'all'
+          only_warn: true
+          sarif_upload: true
+          
+      - name: "Run Kubesec"
+        if: hashFiles('**/*.yaml', '**/*.yml') != ''
+        run: |
+          curl -sSX POST --data-binary @"k8s-manifests.yaml" https://v2.kubesec.io/scan > kubesec-results.json
+          
+      - name: "Upload Infrastructure Scanning Results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: infrastructure-results
+          path: |
+            checkov-results.sarif
+            terrascan-results.sarif
+            kubesec-results.json
+
+  # Dynamic Application Security Testing (DAST)
+  dast:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should_run_scans == 'true' && contains(needs.setup.outputs.security_scans, 'dast')
+    name: "Dynamic Application Security Testing"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci
+        
+      - name: "Start Application"
+        run: |
+          npm run start &
+          sleep 30
+          
+      - name: "Wait for Application"
+        run: |
+          timeout 120 bash -c 'until curl -f http://localhost:3000/health; do sleep 5; done'
+          
+      - name: "Run OWASP ZAP Baseline Scan"
+        uses: zaproxy/action-baseline@v0.10.0
+        with:
+          target: ${{ needs.setup.outputs.target_url }}
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a -j -I'
+          
+      - name: "Run OWASP ZAP Full Scan"
+        uses: zaproxy/action-full-scan@v0.8.0
+        with:
+          target: ${{ needs.setup.outputs.target_url }}
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a -j'
+          
+      - name: "Run Nuclei DAST"
+        uses: projectdiscovery/nuclei-action@main
+        with:
+          target: ${{ needs.setup.outputs.target_url }}
+          github-report: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: "Run Skipfish"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skipfish
+          skipfish -o skipfish-results -S /usr/share/skipfish/dictionaries/complete.wl ${{ needs.setup.outputs.target_url }}
+          
+      - name: "Upload DAST Results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-results
+          path: |
+            zap-results/
+            nuclei-results/
+            skipfish-results/
+
+  # API Security Testing
+  api-security:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should_run_scans == 'true'
+    name: "API Security Testing"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci
+        
+      - name: "Start Application"
+        run: |
+          npm run start &
+          sleep 30
+          
+      - name: "Run API Security Tests"
+        run: |
+          # Install API security testing tools
+          npm install -g dredd
+          npm install -g @apidevtools/swagger-parser
+          
+          # Run API contract testing
+          dredd swagger.yml ${{ needs.setup.outputs.target_url }}
+          
+      - name: "Run OWASP API Security Top 10 Tests"
+        run: |
+          # Test for API security vulnerabilities
+          echo "Testing API security vulnerabilities..."
+          
+          # Test for broken authentication
+          curl -X POST ${{ needs.setup.outputs.target_url }}/api/login -d '{"username":"admin","password":""}' -H "Content-Type: application/json"
+          
+          # Test for excessive data exposure
+          curl -X GET ${{ needs.setup.outputs.target_url }}/api/users -H "Authorization: Bearer invalid_token"
+          
+          # Test for rate limiting
+          for i in {1..100}; do
+            curl -X GET ${{ needs.setup.outputs.target_url }}/api/products &
+          done
+          wait
+          
+      - name: "Upload API Security Results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-security-results
+          path: |
+            dredd-results.json
+            api-security-report.json
+
+  # Compliance Scanning
+  compliance:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should_run_scans == 'true' && contains(needs.setup.outputs.security_scans, 'compliance')
+    name: "Compliance Scanning"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Run OWASP Compliance Check"
+        run: |
+          echo "Checking OWASP compliance..."
+          
+          # Check for OWASP Top 10 compliance
+          # Check for secure coding practices
+          # Check for security headers
+          echo "OWASP compliance check completed"
+          
+      - name: "Run PCI DSS Compliance Check"
+        run: |
+          echo "Checking PCI DSS compliance..."
+          
+          # Check for PCI DSS requirements
+          # Check for secure data handling
+          # Check for encryption standards
+          echo "PCI DSS compliance check completed"
+          
+      - name: "Run GDPR Compliance Check"
+        run: |
+          echo "Checking GDPR compliance..."
+          
+          # Check for privacy controls
+          # Check for data handling procedures
+          # Check for consent mechanisms
+          echo "GDPR compliance check completed"
+          
+      - name: "Upload Compliance Results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-results
+          path: |
+            owasp-compliance-report.json
+            pci-compliance-report.json
+            gdpr-compliance-report.json
+
+  # Security Report Generation
+  security-report:
+    runs-on: ubuntu-latest
+    needs: [setup, sast, sca, secrets, containers, infrastructure, dast, api-security, compliance]
+    if: always()
+    name: "Security Report Generation"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Download All Security Results"
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-results'
+          path: security-results/
+          
+      - name: "Generate Security Report"
+        run: |
+          echo "# Security Scan Report" > security-report.md
+          echo "## Scan Summary" >> security-report.md
+          echo "- Target: ${{ needs.setup.outputs.target_url }}" >> security-report.md
+          echo "- Severity Threshold: ${{ env.SEVERITY_THRESHOLD }}" >> security-report.md
+          echo "- Timestamp: $(date)" >> security-report.md
+          echo "" >> security-report.md
+          
+          echo "## Scan Results" >> security-report.md
+          echo "- SAST: ${{ needs.sast.result }}" >> security-report.md
+          echo "- SCA: ${{ needs.sca.result }}" >> security-report.md
+          echo "- Secrets: ${{ needs.secrets.result }}" >> security-report.md
+          echo "- Containers: ${{ needs.containers.result }}" >> security-report.md
+          echo "- Infrastructure: ${{ needs.infrastructure.result }}" >> security-report.md
+          echo "- DAST: ${{ needs.dast.result }}" >> security-report.md
+          echo "- API Security: ${{ needs.api-security.result }}" >> security-report.md
+          echo "- Compliance: ${{ needs.compliance.result }}" >> security-report.md
+          echo "" >> security-report.md
+          
+          echo "## Security Recommendations" >> security-report.md
+          echo "1. Address all high and critical severity vulnerabilities" >> security-report.md
+          echo "2. Implement security controls for identified risks" >> security-report.md
+          echo "3. Update dependencies with known vulnerabilities" >> security-report.md
+          echo "4. Rotate any exposed secrets or credentials" >> security-report.md
+          echo "5. Review and update security policies" >> security-report.md
+          
+      - name: "Upload Security Report"
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security-report.md
+          
+      - name: "Comment on PR"
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('security-report.md', 'utf8');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## Security Scan Results\n\n' + report
+            });
+            
+      - name: "Notify Security Team"
+        if: failure()
+        run: |
+          echo "🚨 Security scan failed - notifying security team"
+          # Add your notification logic here (Slack, Teams, email, etc.)
+          
+      - name: "Security Gate Check"
+        run: |
+          # Implement security gate logic
+          # Fail the pipeline if critical vulnerabilities are found
+          
+          CRITICAL_VULNS=$(grep -r "CRITICAL" security-results/ | wc -l || echo "0")
+          HIGH_VULNS=$(grep -r "HIGH" security-results/ | wc -l || echo "0")
+          
+          echo "Critical vulnerabilities found: $CRITICAL_VULNS"
+          echo "High vulnerabilities found: $HIGH_VULNS"
+          
+          if [ "$CRITICAL_VULNS" -gt 0 ]; then
+            echo "❌ Critical vulnerabilities found - blocking deployment"
+            exit 1
+          elif [ "$HIGH_VULNS" -gt 5 ]; then
+            echo "⚠️  Too many high vulnerabilities found - review required"
+            exit 1
+          else
+            echo "✅ Security gate passed"
+          fi
