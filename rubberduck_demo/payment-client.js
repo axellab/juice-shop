@@ -1,5 +1,5 @@
 /*
- * Arauco Demo - Payment Service Client
+ * Rubberduck Demo - Payment Service Client
  * Integration module to connect Juice Shop with the Payment Microservice
  */
 

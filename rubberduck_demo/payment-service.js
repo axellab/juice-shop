@@ -1,5 +1,5 @@
 /*
- * Arauco Demo - Payment Microservice for Juice Shop
+ * Rubberduck Demo - Payment Microservice for Juice Shop
  * This microservice handles payment processing, transaction management,
  * and payment method integration for the Juice Shop application.
  */

@@ -1,5 +1,5 @@
 /*
- * Arauco Demo - Order Payment Integration
+ * Rubberduck Demo - Order Payment Integration
  * This module demonstrates how to integrate the payment microservice
  * with the existing Juice Shop order processing flow.
  */

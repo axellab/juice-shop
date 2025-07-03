@@ -1,0 +1,86 @@
+{
+  "service": {
+    "name": "payment-verification-service",
+    "version": "1.0.0",
+    "port": 3002,
+    "environment": "development",
+    "logLevel": "info"
+  },
+  "dependencies": {
+    "paymentService": {
+      "url": "http://localhost:3001",
+      "timeout": 5000,
+      "retryAttempts": 3
+    },
+    "juiceShop": {
+      "url": "http://localhost:3000",
+      "apiKey": "juice-shop-verification-key"
+    }
+  },
+  "verification": {
+    "defaultCacheExpiry": 3600,
+    "maxConcurrentVerifications": 100,
+    "timeoutMs": 30000,
+    "allowPartialVerification": true,
+    "strictMode": false
+  },
+  "notifications": {
+    "channels": {
+      "email": {
+        "enabled": true,
+        "templates": {
+          "paymentSuccess": "payment-success-template",
+          "paymentFailed": "payment-failed-template",
+          "paymentRefund": "payment-refund-template"
+        }
+      },
+      "sms": {
+        "enabled": false
+      },
+      "webhook": {
+        "enabled": true,
+        "endpoints": {
+          "default": "/api/webhook/payment-events"
+        }
+      }
+    },
+    "defaultChannel": "email"
+  },
+  "reconciliation": {
+    "scheduleEnabled": true,
+    "cronSchedule": "0 0 * * *",
+    "lookbackDays": 7,
+    "batchSize": 100,
+    "generateReports": true,
+    "reportFormats": ["json", "csv"]
+  },
+  "reporting": {
+    "enabled": true,
+    "storageDirectory": "./reports",
+    "retentionDays": 30,
+    "formats": ["json", "csv", "pdf"]
+  },
+  "security": {
+    "rateLimiting": {
+      "enabled": true,
+      "maxRequestsPerMinute": 120
+    },
+    "ipWhitelist": [],
+    "requireAuthentication": false,
+    "jwtSecret": "your-jwt-secret-here-for-dev-only"
+  },
+  "monitoring": {
+    "health": {
+      "enabled": true,
+      "endpoint": "/health"
+    },
+    "metrics": {
+      "enabled": true,
+      "endpoint": "/metrics"
+    },
+    "alerting": {
+      "failureRateThreshold": 0.05,
+      "responseTimeThreshold": 5000
+    }
+  }
+}
