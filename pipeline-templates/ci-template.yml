@@ -1,0 +1,352 @@
+# Continuous Integration Pipeline Template
+# Based on OWASP Juice Shop CI/CD best practices
+# Adapt this template for your project by replacing variables and customizing jobs
+
+name: "CI Pipeline"
+
+on:
+  push:
+    branches-ignore:
+      - 'l10n_*'  # Ignore localization branches
+      - 'gh-pages'
+    paths-ignore:
+      - '*.md'
+      - 'LICENSE'
+      - 'docs/**'
+      - 'screenshots/**'
+    tags-ignore:
+      - '*'
+  pull_request:
+    paths-ignore:
+      - '*.md'
+      - 'LICENSE'
+      - 'docs/**'
+
+env:
+  # Customize these variables for your project
+  NODE_DEFAULT_VERSION: 20
+  NODE_OPTIONS: "--max_old_space_size=4096"
+  PROJECT_NAME: "your-project-name"
+  
+  # Security scanning tools versions
+  CYCLONEDX_NPM_VERSION: '^2.0.0||^3.0.0'
+
+jobs:
+  # Code Quality and Linting
+  lint:
+    runs-on: ubuntu-latest
+    name: "Code Quality & Linting"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: |
+          npm ci
+          
+      - name: "Run Linter"
+        run: |
+          npm run lint
+          
+      - name: "Check Code Formatting"
+        run: |
+          npm run format:check
+          
+      - name: "Validate Configuration Files"
+        run: |
+          # Add your config validation commands here
+          # Example: npm run validate:config
+          echo "Add configuration validation commands"
+
+  # Security Scanning
+  security-scan:
+    runs-on: ubuntu-latest
+    name: "Security Scanning"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci
+        
+      - name: "Run Security Audit"
+        run: |
+          npm audit --audit-level=moderate
+          
+      - name: "Software Composition Analysis"
+        run: |
+          npm install -g @cyclonedx/cyclonedx-npm@${{ env.CYCLONEDX_NPM_VERSION }}
+          cyclonedx-npm --omit=dev --output-format=JSON --output-file=sbom.json
+          
+      - name: "Upload SBOM"
+        uses: actions/upload-artifact@v4
+        with:
+          name: software-bill-of-materials
+          path: sbom.json
+          
+      - name: "CodeQL Analysis"
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+          
+      - name: "Perform CodeQL Analysis"
+        uses: github/codeql-action/analyze@v3
+
+  # Unit Testing
+  unit-tests:
+    runs-on: ${{ matrix.os }}
+    name: "Unit Tests"
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node-version: [18, 20, 22]
+      fail-fast: false
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js ${{ matrix.node-version }}"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci
+        
+      - name: "Run Unit Tests"
+        run: |
+          npm run test:unit
+          
+      - name: "Generate Coverage Report"
+        run: |
+          npm run test:coverage
+          
+      - name: "Upload Coverage to Codecov"
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage/lcov.info
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  # Integration Testing
+  integration-tests:
+    runs-on: ubuntu-latest
+    name: "Integration Tests"
+    services:
+      # Add your required services here
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+          
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci
+        
+      - name: "Setup Test Database"
+        run: |
+          # Add your database setup commands here
+          npm run db:migrate
+          npm run db:seed
+          
+      - name: "Run Integration Tests"
+        run: |
+          npm run test:integration
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/test_db
+          
+      - name: "Upload Test Results"
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: test-results/
+
+  # API Testing
+  api-tests:
+    runs-on: ubuntu-latest
+    name: "API Tests"
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci
+        
+      - name: "Start Application"
+        run: |
+          npm run start &
+          sleep 10
+          
+      - name: "Run API Tests"
+        run: |
+          npm run test:api
+          
+      - name: "Upload API Test Coverage"
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-coverage
+          path: coverage/api/
+
+  # Build and Package
+  build:
+    runs-on: ubuntu-latest
+    name: "Build & Package"
+    needs: [lint, security-scan, unit-tests]
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci
+        
+      - name: "Build Application"
+        run: |
+          npm run build
+          
+      - name: "Create Package"
+        run: |
+          npm run package
+          
+      - name: "Upload Build Artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            dist/
+            build/
+            
+  # Docker Build
+  docker-build:
+    runs-on: ubuntu-latest
+    name: "Docker Build"
+    needs: [build]
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Set up Docker Buildx"
+        uses: docker/setup-buildx-action@v3
+        
+      - name: "Build Docker Image"
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: ${{ env.PROJECT_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          
+      - name: "Test Docker Image"
+        run: |
+          docker run --rm ${{ env.PROJECT_NAME }}:${{ github.sha }} npm run test:smoke
+
+  # Smoke Testing
+  smoke-tests:
+    runs-on: ubuntu-latest
+    name: "Smoke Tests"
+    needs: [build]
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Download Build Artifacts"
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: ./artifacts/
+          
+      - name: "Run Smoke Tests"
+        run: |
+          npm run test:smoke
+          
+  # Performance Testing
+  performance-tests:
+    runs-on: ubuntu-latest
+    name: "Performance Tests"
+    needs: [build]
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci
+        
+      - name: "Run Performance Tests"
+        run: |
+          npm run test:performance
+          
+      - name: "Upload Performance Results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-results
+          path: performance-results/
+
+  # Notification
+  notify:
+    runs-on: ubuntu-latest
+    name: "Notify Results"
+    needs: [lint, security-scan, unit-tests, integration-tests, api-tests, build, docker-build, smoke-tests, performance-tests]
+    if: always()
+    steps:
+      - name: "Notify Success"
+        if: ${{ success() }}
+        run: |
+          echo "✅ All CI checks passed!"
+          # Add your notification logic here (Slack, Teams, etc.)
+          
+      - name: "Notify Failure"
+        if: ${{ failure() }}
+        run: |
+          echo "❌ CI checks failed!"
+          # Add your notification logic here (Slack, Teams, etc.)

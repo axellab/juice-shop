@@ -1,0 +1,634 @@
+# Continuous Chaos Engineering Pipeline Template
+# Implements chaos engineering practices for resilience testing
+# Adapt this template for your project by replacing variables and customizing chaos experiments
+
+name: "Continuous Chaos Engineering"
+
+on:
+  schedule:
+    # Run chaos experiments daily at different times
+    - cron: '0 10 * * 1-5'  # Weekdays at 10 AM UTC
+    - cron: '0 15 * * 2,4'  # Tuesday and Thursday at 3 PM UTC
+  workflow_dispatch:
+    inputs:
+      chaos_type:
+        description: 'Type of chaos experiment'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - infrastructure
+          - application
+          - network
+          - database
+          - security
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      duration:
+        description: 'Experiment duration (minutes)'
+        required: true
+        default: '5'
+        type: string
+      dry_run:
+        description: 'Dry run (no actual chaos)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  # Customize these variables for your project
+  PROJECT_NAME: "your-project-name"
+  CHAOS_TOOLKIT_VERSION: "latest"
+  
+  # Environment URLs
+  STAGING_URL: "https://staging.your-domain.com"
+  PRODUCTION_URL: "https://your-domain.com"
+  
+  # Monitoring and alerting
+  GRAFANA_URL: "https://grafana.your-domain.com"
+  PROMETHEUS_URL: "https://prometheus.your-domain.com"
+  
+  # Chaos experiment configuration
+  DEFAULT_EXPERIMENT_DURATION: 300  # 5 minutes
+  RECOVERY_TIME: 60  # 1 minute
+  
+jobs:
+  # Setup and Preparation
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+      chaos_experiments: ${{ steps.experiments.outputs.experiments }}
+      target_url: ${{ steps.env.outputs.target_url }}
+      experiment_duration: ${{ steps.env.outputs.experiment_duration }}
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Determine Environment and Configuration"
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+            echo "experiment_duration=${{ github.event.inputs.duration }}" >> $GITHUB_OUTPUT
+          else
+            echo "environment=staging" >> $GITHUB_OUTPUT
+            echo "experiment_duration=5" >> $GITHUB_OUTPUT
+          fi
+          
+          if [ "${{ steps.env.outputs.environment }}" == "production" ]; then
+            echo "target_url=${{ env.PRODUCTION_URL }}" >> $GITHUB_OUTPUT
+          else
+            echo "target_url=${{ env.STAGING_URL }}" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: "Select Chaos Experiments"
+        id: experiments
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            CHAOS_TYPE="${{ github.event.inputs.chaos_type }}"
+          else
+            CHAOS_TYPE="all"
+          fi
+          
+          case $CHAOS_TYPE in
+            "infrastructure")
+              echo "experiments=['cpu-stress', 'memory-stress', 'disk-stress', 'pod-kill']" >> $GITHUB_OUTPUT
+              ;;
+            "application")
+              echo "experiments=['app-kill', 'slow-response', 'error-injection', 'dependency-failure']" >> $GITHUB_OUTPUT
+              ;;
+            "network")
+              echo "experiments=['network-latency', 'network-loss', 'network-partition', 'dns-failure']" >> $GITHUB_OUTPUT
+              ;;
+            "database")
+              echo "experiments=['db-connection-limit', 'db-slow-query', 'db-failover', 'db-corruption']" >> $GITHUB_OUTPUT
+              ;;
+            "security")
+              echo "experiments=['unauthorized-access', 'certificate-expiry', 'rate-limiting', 'ddos-simulation']" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "experiments=['cpu-stress', 'memory-stress', 'app-kill', 'network-latency', 'db-connection-limit']" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+  # Pre-Chaos Health Check
+  pre-chaos-health:
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Health Check - Application"
+        run: |
+          echo "🏥 Checking application health before chaos..."
+          
+          # Check application endpoints
+          curl -f ${{ needs.setup.outputs.target_url }}/health || exit 1
+          curl -f ${{ needs.setup.outputs.target_url }}/api/health || exit 1
+          
+          # Check response time
+          response_time=$(curl -o /dev/null -s -w '%{time_total}' ${{ needs.setup.outputs.target_url }})
+          echo "Response time: ${response_time}s"
+          
+          # Store baseline metrics
+          echo "BASELINE_RESPONSE_TIME=${response_time}" >> $GITHUB_ENV
+          
+      - name: "Health Check - Infrastructure"
+        run: |
+          echo "🏥 Checking infrastructure health..."
+          
+          # Check CPU and memory usage
+          # This would be adapted based on your monitoring system
+          echo "Checking system metrics..."
+          
+      - name: "Health Check - Dependencies"
+        run: |
+          echo "🏥 Checking dependencies health..."
+          
+          # Check database connectivity
+          # Check external services
+          # Check message queues
+          echo "All dependencies healthy"
+
+  # Infrastructure Chaos Experiments
+  infrastructure-chaos:
+    runs-on: ubuntu-latest
+    needs: [setup, pre-chaos-health]
+    if: contains(needs.setup.outputs.chaos_experiments, 'cpu-stress') || contains(needs.setup.outputs.chaos_experiments, 'memory-stress') || contains(needs.setup.outputs.chaos_experiments, 'disk-stress') || contains(needs.setup.outputs.chaos_experiments, 'pod-kill')
+    strategy:
+      matrix:
+        experiment: [cpu-stress, memory-stress, disk-stress, pod-kill]
+      fail-fast: false
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Chaos Toolkit"
+        run: |
+          pip install chaostoolkit
+          pip install chaostoolkit-kubernetes
+          pip install chaostoolkit-prometheus
+          
+      - name: "Run ${{ matrix.experiment }} Experiment"
+        run: |
+          echo "🌪️ Starting ${{ matrix.experiment }} chaos experiment..."
+          
+          case "${{ matrix.experiment }}" in
+            "cpu-stress")
+              cat > chaos-experiment.json << EOF
+          {
+            "title": "CPU Stress Test",
+            "description": "Stress test CPU to validate application resilience",
+            "configuration": {
+              "prometheus_base_url": "${{ env.PROMETHEUS_URL }}"
+            },
+            "steady-state-hypothesis": {
+              "title": "Application is healthy",
+              "probes": [
+                {
+                  "name": "health-check",
+                  "type": "probe",
+                  "tolerance": 200,
+                  "provider": {
+                    "type": "http",
+                    "url": "${{ needs.setup.outputs.target_url }}/health"
+                  }
+                }
+              ]
+            },
+            "method": [
+              {
+                "name": "stress-cpu",
+                "type": "action",
+                "provider": {
+                  "type": "process",
+                  "path": "stress-ng",
+                  "arguments": "--cpu 2 --timeout ${{ needs.setup.outputs.experiment_duration }}s"
+                }
+              }
+            ],
+            "rollbacks": [
+              {
+                "name": "stop-stress",
+                "type": "action",
+                "provider": {
+                  "type": "process",
+                  "path": "pkill",
+                  "arguments": "-f stress-ng"
+                }
+              }
+            ]
+          }
+          EOF
+              ;;
+            "memory-stress")
+              cat > chaos-experiment.json << EOF
+          {
+            "title": "Memory Stress Test",
+            "description": "Stress test memory to validate application resilience",
+            "steady-state-hypothesis": {
+              "title": "Application is healthy",
+              "probes": [
+                {
+                  "name": "health-check",
+                  "type": "probe",
+                  "tolerance": 200,
+                  "provider": {
+                    "type": "http",
+                    "url": "${{ needs.setup.outputs.target_url }}/health"
+                  }
+                }
+              ]
+            },
+            "method": [
+              {
+                "name": "stress-memory",
+                "type": "action",
+                "provider": {
+                  "type": "process",
+                  "path": "stress-ng",
+                  "arguments": "--vm 2 --vm-bytes 1G --timeout ${{ needs.setup.outputs.experiment_duration }}s"
+                }
+              }
+            ]
+          }
+          EOF
+              ;;
+            "disk-stress")
+              cat > chaos-experiment.json << EOF
+          {
+            "title": "Disk I/O Stress Test",
+            "description": "Stress test disk I/O to validate application resilience",
+            "steady-state-hypothesis": {
+              "title": "Application is healthy",
+              "probes": [
+                {
+                  "name": "health-check",
+                  "type": "probe",
+                  "tolerance": 200,
+                  "provider": {
+                    "type": "http",
+                    "url": "${{ needs.setup.outputs.target_url }}/health"
+                  }
+                }
+              ]
+            },
+            "method": [
+              {
+                "name": "stress-disk",
+                "type": "action",
+                "provider": {
+                  "type": "process",
+                  "path": "stress-ng",
+                  "arguments": "--io 4 --timeout ${{ needs.setup.outputs.experiment_duration }}s"
+                }
+              }
+            ]
+          }
+          EOF
+              ;;
+            "pod-kill")
+              cat > chaos-experiment.json << EOF
+          {
+            "title": "Pod Kill Test",
+            "description": "Kill random pods to test resilience",
+            "steady-state-hypothesis": {
+              "title": "Application is healthy",
+              "probes": [
+                {
+                  "name": "health-check",
+                  "type": "probe",
+                  "tolerance": 200,
+                  "provider": {
+                    "type": "http",
+                    "url": "${{ needs.setup.outputs.target_url }}/health"
+                  }
+                }
+              ]
+            },
+            "method": [
+              {
+                "name": "kill-pod",
+                "type": "action",
+                "provider": {
+                  "type": "python",
+                  "module": "chaosk8s.pod.actions",
+                  "func": "kill_pods",
+                  "arguments": {
+                    "label_selector": "app=${{ env.PROJECT_NAME }}",
+                    "rand": true,
+                    "qty": 1
+                  }
+                }
+              }
+            ]
+          }
+          EOF
+              ;;
+          esac
+          
+          # Run the experiment
+          if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+            echo "🧪 Dry run mode - validating experiment..."
+            chaos validate chaos-experiment.json
+          else
+            echo "🌪️ Running chaos experiment..."
+            chaos run chaos-experiment.json --report-path=chaos-report.json
+          fi
+          
+      - name: "Upload Experiment Results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-experiment-${{ matrix.experiment }}
+          path: |
+            chaos-report.json
+            chaos-experiment.json
+
+  # Application Chaos Experiments
+  application-chaos:
+    runs-on: ubuntu-latest
+    needs: [setup, pre-chaos-health]
+    if: contains(needs.setup.outputs.chaos_experiments, 'app-kill') || contains(needs.setup.outputs.chaos_experiments, 'slow-response') || contains(needs.setup.outputs.chaos_experiments, 'error-injection')
+    strategy:
+      matrix:
+        experiment: [app-kill, slow-response, error-injection, dependency-failure]
+      fail-fast: false
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Chaos Toolkit"
+        run: |
+          pip install chaostoolkit
+          pip install chaostoolkit-http
+          
+      - name: "Run ${{ matrix.experiment }} Experiment"
+        run: |
+          echo "🌪️ Starting ${{ matrix.experiment }} chaos experiment..."
+          
+          case "${{ matrix.experiment }}" in
+            "app-kill")
+              # Kill application process
+              echo "Killing application process..."
+              ;;
+            "slow-response")
+              # Inject response delays
+              echo "Injecting response delays..."
+              ;;
+            "error-injection")
+              # Inject errors in responses
+              echo "Injecting application errors..."
+              ;;
+            "dependency-failure")
+              # Simulate dependency failures
+              echo "Simulating dependency failures..."
+              ;;
+          esac
+          
+      - name: "Monitor Application Recovery"
+        run: |
+          echo "📊 Monitoring application recovery..."
+          
+          # Wait for recovery
+          sleep ${{ env.RECOVERY_TIME }}
+          
+          # Check if application recovered
+          for i in {1..10}; do
+            if curl -f ${{ needs.setup.outputs.target_url }}/health; then
+              echo "✅ Application recovered after ${i} attempts"
+              break
+            fi
+            echo "⏳ Waiting for recovery... attempt ${i}"
+            sleep 10
+          done
+
+  # Network Chaos Experiments
+  network-chaos:
+    runs-on: ubuntu-latest
+    needs: [setup, pre-chaos-health]
+    if: contains(needs.setup.outputs.chaos_experiments, 'network-latency') || contains(needs.setup.outputs.chaos_experiments, 'network-loss') || contains(needs.setup.outputs.chaos_experiments, 'network-partition')
+    strategy:
+      matrix:
+        experiment: [network-latency, network-loss, network-partition, dns-failure]
+      fail-fast: false
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Network Chaos Tools"
+        run: |
+          # Install network chaos tools
+          sudo apt-get update
+          sudo apt-get install -y tc iproute2
+          
+      - name: "Run ${{ matrix.experiment }} Experiment"
+        run: |
+          echo "🌪️ Starting ${{ matrix.experiment }} chaos experiment..."
+          
+          case "${{ matrix.experiment }}" in
+            "network-latency")
+              # Add network latency
+              echo "Adding network latency..."
+              ;;
+            "network-loss")
+              # Add packet loss
+              echo "Adding packet loss..."
+              ;;
+            "network-partition")
+              # Create network partition
+              echo "Creating network partition..."
+              ;;
+            "dns-failure")
+              # Simulate DNS failures
+              echo "Simulating DNS failures..."
+              ;;
+          esac
+
+  # Database Chaos Experiments
+  database-chaos:
+    runs-on: ubuntu-latest
+    needs: [setup, pre-chaos-health]
+    if: contains(needs.setup.outputs.chaos_experiments, 'db-connection-limit') || contains(needs.setup.outputs.chaos_experiments, 'db-slow-query') || contains(needs.setup.outputs.chaos_experiments, 'db-failover')
+    strategy:
+      matrix:
+        experiment: [db-connection-limit, db-slow-query, db-failover, db-corruption]
+      fail-fast: false
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Run ${{ matrix.experiment }} Experiment"
+        run: |
+          echo "🌪️ Starting ${{ matrix.experiment }} chaos experiment..."
+          
+          case "${{ matrix.experiment }}" in
+            "db-connection-limit")
+              # Exhaust database connections
+              echo "Exhausting database connections..."
+              ;;
+            "db-slow-query")
+              # Inject slow queries
+              echo "Injecting slow queries..."
+              ;;
+            "db-failover")
+              # Simulate database failover
+              echo "Simulating database failover..."
+              ;;
+            "db-corruption")
+              # Simulate data corruption
+              echo "Simulating data corruption..."
+              ;;
+          esac
+
+  # Security Chaos Experiments
+  security-chaos:
+    runs-on: ubuntu-latest
+    needs: [setup, pre-chaos-health]
+    if: contains(needs.setup.outputs.chaos_experiments, 'unauthorized-access') || contains(needs.setup.outputs.chaos_experiments, 'certificate-expiry') || contains(needs.setup.outputs.chaos_experiments, 'rate-limiting')
+    strategy:
+      matrix:
+        experiment: [unauthorized-access, certificate-expiry, rate-limiting, ddos-simulation]
+      fail-fast: false
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Run ${{ matrix.experiment }} Experiment"
+        run: |
+          echo "🌪️ Starting ${{ matrix.experiment }} chaos experiment..."
+          
+          case "${{ matrix.experiment }}" in
+            "unauthorized-access")
+              # Test unauthorized access scenarios
+              echo "Testing unauthorized access..."
+              ;;
+            "certificate-expiry")
+              # Simulate certificate expiry
+              echo "Simulating certificate expiry..."
+              ;;
+            "rate-limiting")
+              # Test rate limiting
+              echo "Testing rate limiting..."
+              ;;
+            "ddos-simulation")
+              # Simulate DDoS attack
+              echo "Simulating DDoS attack..."
+              ;;
+          esac
+
+  # Post-Chaos Health Check
+  post-chaos-health:
+    runs-on: ubuntu-latest
+    needs: [setup, infrastructure-chaos, application-chaos, network-chaos, database-chaos, security-chaos]
+    if: always()
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Wait for System Stabilization"
+        run: |
+          echo "⏳ Waiting for system stabilization..."
+          sleep ${{ env.RECOVERY_TIME }}
+          
+      - name: "Health Check - Application"
+        run: |
+          echo "🏥 Checking application health after chaos..."
+          
+          # Check application endpoints
+          curl -f ${{ needs.setup.outputs.target_url }}/health || exit 1
+          curl -f ${{ needs.setup.outputs.target_url }}/api/health || exit 1
+          
+          # Check response time
+          response_time=$(curl -o /dev/null -s -w '%{time_total}' ${{ needs.setup.outputs.target_url }})
+          echo "Response time: ${response_time}s"
+          
+      - name: "Health Check - Data Integrity"
+        run: |
+          echo "🏥 Checking data integrity..."
+          
+          # Run data integrity checks
+          # Check database consistency
+          # Verify critical data
+          echo "Data integrity check completed"
+          
+      - name: "Health Check - Performance"
+        run: |
+          echo "🏥 Checking performance metrics..."
+          
+          # Check performance metrics
+          # Compare with baseline
+          echo "Performance check completed"
+
+  # Chaos Engineering Report
+  chaos-report:
+    runs-on: ubuntu-latest
+    needs: [setup, infrastructure-chaos, application-chaos, network-chaos, database-chaos, security-chaos, post-chaos-health]
+    if: always()
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Download All Experiment Results"
+        uses: actions/download-artifact@v4
+        with:
+          pattern: 'chaos-experiment-*'
+          path: chaos-results/
+          
+      - name: "Generate Chaos Engineering Report"
+        run: |
+          echo "# Chaos Engineering Report" > chaos-report.md
+          echo "## Experiment Summary" >> chaos-report.md
+          echo "- Environment: ${{ needs.setup.outputs.environment }}" >> chaos-report.md
+          echo "- Target: ${{ needs.setup.outputs.target_url }}" >> chaos-report.md
+          echo "- Duration: ${{ needs.setup.outputs.experiment_duration }} minutes" >> chaos-report.md
+          echo "- Timestamp: $(date)" >> chaos-report.md
+          echo "" >> chaos-report.md
+          
+          echo "## Experiment Results" >> chaos-report.md
+          echo "- Infrastructure Chaos: ${{ needs.infrastructure-chaos.result }}" >> chaos-report.md
+          echo "- Application Chaos: ${{ needs.application-chaos.result }}" >> chaos-report.md
+          echo "- Network Chaos: ${{ needs.network-chaos.result }}" >> chaos-report.md
+          echo "- Database Chaos: ${{ needs.database-chaos.result }}" >> chaos-report.md
+          echo "- Security Chaos: ${{ needs.security-chaos.result }}" >> chaos-report.md
+          echo "" >> chaos-report.md
+          
+          echo "## Recommendations" >> chaos-report.md
+          echo "- Review failed experiments for system improvements" >> chaos-report.md
+          echo "- Update incident response procedures" >> chaos-report.md
+          echo "- Schedule regular chaos engineering sessions" >> chaos-report.md
+          
+      - name: "Upload Chaos Report"
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-engineering-report
+          path: chaos-report.md
+          
+      - name: "Notify Results"
+        run: |
+          echo "🎯 Chaos Engineering experiments completed!"
+          echo "📊 Check the chaos report for detailed results"
+          # Add your notification logic here (Slack, Teams, etc.)
+
+  # Cleanup
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: [chaos-report]
+    if: always()
+    steps:
+      - name: "Cleanup Chaos Resources"
+        run: |
+          echo "🧹 Cleaning up chaos engineering resources..."
+          
+          # Stop any running chaos tools
+          # Clean up temporary files
+          # Reset any modified configurations
+          echo "Cleanup completed"
