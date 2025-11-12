@@ -68,6 +68,13 @@ export function transformData (request: ProcessingRequest): ProcessingResponse {
 }
 
 /**
+ * Check if a key is safe to use for object property assignment
+ */
+function isSafeKey (key: string): boolean {
+  return key !== '__proto__' && key !== 'constructor' && key !== 'prototype'
+}
+
+/**
  * Transform string data to uppercase
  */
 function transformToUpperCase (data: any): any {
@@ -80,7 +87,9 @@ function transformToUpperCase (data: any): any {
   if (typeof data === 'object' && data !== null) {
     const result: Record<string, any> = {}
     for (const key in data) {
-      result[key] = transformToUpperCase(data[key])
+      if (Object.prototype.hasOwnProperty.call(data, key) && isSafeKey(key)) {
+        result[key] = transformToUpperCase(data[key])
+      }
     }
     return result
   }
@@ -100,7 +109,9 @@ function transformToLowerCase (data: any): any {
   if (typeof data === 'object' && data !== null) {
     const result: Record<string, any> = {}
     for (const key in data) {
-      result[key] = transformToLowerCase(data[key])
+      if (Object.prototype.hasOwnProperty.call(data, key) && isSafeKey(key)) {
+        result[key] = transformToLowerCase(data[key])
+      }
     }
     return result
   }
@@ -120,7 +131,9 @@ function aggregateData (data: any[], options: Record<string, any>): any {
   if (!groupBy) {
     return data.reduce((acc, item) => {
       sumFields.forEach((field: string) => {
-        acc[field] = (acc[field] || 0) + (item[field] || 0)
+        if (isSafeKey(field)) {
+          acc[field] = (acc[field] || 0) + (item[field] || 0)
+        }
       })
       return acc
     }, {})
@@ -129,15 +142,23 @@ function aggregateData (data: any[], options: Record<string, any>): any {
   const grouped: Record<string, any> = {}
 
   data.forEach(item => {
-    const key = item[groupBy]
+    const key = String(item[groupBy])
+    // Skip unsafe keys to prevent prototype pollution
+    if (!isSafeKey(key)) {
+      return
+    }
     if (!grouped[key]) {
       grouped[key] = { [groupBy]: key }
       sumFields.forEach((field: string) => {
-        grouped[key][field] = 0
+        if (isSafeKey(field)) {
+          grouped[key][field] = 0
+        }
       })
     }
     sumFields.forEach((field: string) => {
-      grouped[key][field] += item[field] || 0
+      if (isSafeKey(field)) {
+        grouped[key][field] += item[field] || 0
+      }
     })
   })
 
@@ -178,7 +199,7 @@ function mapData (data: any[], options: Record<string, any>): any {
   return data.map(item => {
     const mapped: Record<string, any> = {}
     fields.forEach((field: string) => {
-      if (item[field] !== undefined) {
+      if (isSafeKey(field) && item[field] !== undefined) {
         mapped[field] = item[field]
       }
     })
