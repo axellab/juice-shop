@@ -1,0 +1,205 @@
+# Data Processing Microservice Architecture
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Client Applications                         │
+│  (Browser, Mobile App, Other Services, curl, Postman, etc.)        │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │
+                                 │ HTTP REST API
+                                 │
+                     ┌───────────▼───────────┐
+                     │                       │
+                     │   Express Server      │
+                     │   (server.ts)         │
+                     │                       │
+                     └───────────┬───────────┘
+                                 │
+                                 │ Routes
+                                 │
+              ┌──────────────────┼──────────────────┐
+              │                  │                  │
+              │                  │                  │
+    ┌─────────▼─────────┐       │       ┌─────────▼─────────┐
+    │  Existing Routes  │       │       │  NEW: Data        │
+    │  - /rest/user     │       │       │  Processing       │
+    │  - /rest/basket   │       │       │  Routes           │
+    │  - /api/Products  │       │       │  (routes/         │
+    │  - /api/Users     │       │       │  dataProcessing)  │
+    │  - etc...         │       │       └─────────┬─────────┘
+    └───────────────────┘       │                 │
+                                 │                 │
+                                 │       ┌─────────▼─────────┐
+                                 │       │  Route Handlers   │
+                                 │       │  ================  │
+                                 │       │  - healthCheck()  │
+                                 │       │  - getOperations()│
+                                 │       │  - processData()  │
+                                 │       │  - processSources│
+                                 │       └─────────┬─────────┘
+                                 │                 │
+                                 │                 │ Calls
+                                 │                 │
+                                 │       ┌─────────▼──────────┐
+                                 │       │  Core Service      │
+                                 │       │  (lib/             │
+                                 │       │  dataProcessing)   │
+                                 │       │  ================  │
+                                 │       │  Business Logic:   │
+                                 │       │  - transformData() │
+                                 │       │  - validateRequest()│
+                                 │       │  - isSafeKey()    │
+                                 │       │                    │
+                                 │       │  Operations:       │
+                                 │       │  - uppercase       │
+                                 │       │  - lowercase       │
+                                 │       │  - filter          │
+                                 │       │  - map             │
+                                 │       │  - aggregate       │
+                                 │       └────────────────────┘
+                                 │
+                                 │
+                     ┌───────────▼───────────┐
+                     │                       │
+                     │   Other Services      │
+                     │   - Database          │
+                     │   - File System       │
+                     │   - External APIs     │
+                     │                       │
+                     └───────────────────────┘
+
+
+API Endpoints:
+==============
+
+GET  /rest/data-processing/health
+     └─> Returns service health status
+
+GET  /rest/data-processing/operations
+     └─> Returns list of available operations
+
+POST /rest/data-processing/process
+     └─> Transforms data based on operation
+         Body: {operation, data, options}
+
+POST /rest/data-processing/process-multiple
+     └─> Processes data from multiple sources
+         Body: {sources: [{name, data}, ...]}
+
+
+Data Flow Example:
+==================
+
+1. Client Request:
+   POST /rest/data-processing/process
+   {
+     "operation": "aggregate",
+     "data": [
+       {"category": "A", "value": 10},
+       {"category": "A", "value": 20}
+     ],
+     "options": {
+       "groupBy": "category",
+       "sumFields": ["value"]
+     }
+   }
+
+2. Route Handler (routes/dataProcessing.ts):
+   - Validates request format
+   - Calls core service
+
+3. Core Service (lib/dataProcessing.ts):
+   - Validates operation
+   - Applies security checks (isSafeKey)
+   - Executes aggregateData()
+   - Returns result
+
+4. Response:
+   {
+     "status": "success",
+     "result": [
+       {"category": "A", "value": 30}
+     ]
+   }
+
+
+Security Layers:
+================
+
+┌─────────────────────────────────┐
+│  1. Request Validation          │
+│     - Structure check           │
+│     - Required fields           │
+└────────────┬────────────────────┘
+             │
+┌────────────▼────────────────────┐
+│  2. Operation Validation        │
+│     - Known operation check     │
+└────────────┬────────────────────┘
+             │
+┌────────────▼────────────────────┐
+│  3. Property Safety Check       │
+│     - isSafeKey() validation    │
+│     - Block: __proto__          │
+│     - Block: constructor        │
+│     - Block: prototype          │
+└────────────┬────────────────────┘
+             │
+┌────────────▼────────────────────┐
+│  4. Type Validation             │
+│     - Array/Object checks       │
+│     - Error handling            │
+└─────────────────────────────────┘
+
+
+Integration Points:
+===================
+
+The microservice can be integrated with:
+
+1. Frontend Applications
+   └─> JavaScript/TypeScript fetch() calls
+
+2. Other Backend Services
+   └─> HTTP REST API calls
+
+3. Scheduled Jobs
+   └─> Cron jobs or task schedulers
+
+4. Data Pipelines
+   └─> ETL processes
+
+5. External Services
+   └─> Webhooks or API integrations
+
+
+File Structure:
+===============
+
+juice-shop/
+├── lib/
+│   └── dataProcessing.ts         ← Core service logic
+│       ├── transformData()       ← Main entry point
+│       ├── validateRequest()     ← Input validation
+│       ├── isSafeKey()          ← Security check
+│       ├── transformToUpperCase() ← Operation
+│       ├── transformToLowerCase() ← Operation
+│       ├── aggregateData()       ← Operation
+│       ├── filterData()          ← Operation
+│       ├── mapData()             ← Operation
+│       └── processMultipleSources() ← Multi-source
+│
+├── routes/
+│   └── dataProcessing.ts         ← API route handlers
+│       ├── processData()         ← POST handler
+│       ├── processMultipleSources() ← POST handler
+│       ├── healthCheck()         ← GET handler
+│       └── getOperations()       ← GET handler
+│
+├── server.ts                     ← Route registration
+│   └── app.post('/rest/data-processing/...') ← 4 routes
+│
+└── test/
+    ├── api/
+    │   └── dataProcessingSpec.ts ← API tests (20+ cases)
+    └── server/
+        └── dataProcessingSpec.ts ← Unit tests (15+ cases)
