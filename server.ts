@@ -124,6 +124,7 @@ import { orderHistory, allOrders, toggleDeliveryStatus } from './routes/orderHis
 import { continueCode, continueCodeFindIt, continueCodeFixIt } from './routes/continueCode'
 import { serveChallengesWithCodeSnippet, serveCodeSnippet, checkVulnLines } from './routes/vulnCodeSnippet'
 import { ensureFileIsPassed, handleZipFileUpload, checkUploadSize, checkFileType, handleXmlUpload, handleYamlUpload } from './routes/fileUpload'
+import * as dataProcessingRoute from './routes/dataProcessing'
 
 const app = express()
 const server = new http.Server(app)
@@ -606,6 +607,11 @@ restoreOverwrittenFilesWithOriginals().then(() => {
   app.get('/rest/memories', getMemories())
   app.get('/rest/chatbot/status', chatbot.status())
   app.post('/rest/chatbot/respond', chatbot.process())
+  /* Data Processing Microservice API endpoints */
+  app.get('/rest/data-processing/health', dataProcessingRoute.healthCheck())
+  app.get('/rest/data-processing/operations', dataProcessingRoute.getOperations())
+  app.post('/rest/data-processing/process', dataProcessingRoute.processData())
+  app.post('/rest/data-processing/process-multiple', dataProcessingRoute.processMultipleSources())
   /* NoSQL API endpoints */
   app.get('/rest/products/:id/reviews', showProductReviews())
   app.put('/rest/products/:id/reviews', createProductReviews())
