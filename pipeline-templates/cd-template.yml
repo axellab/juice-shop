@@ -1,0 +1,380 @@
+# Continuous Deployment Pipeline Template
+# Based on OWASP Juice Shop deployment best practices
+# Adapt this template for your project by replacing variables and customizing environments
+
+name: "CD Pipeline"
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - release/*
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      force_deploy:
+        description: 'Force deployment (skip some checks)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  # Customize these variables for your project
+  NODE_DEFAULT_VERSION: 20
+  PROJECT_NAME: "your-project-name"
+  DOCKER_REGISTRY: "your-registry.com"
+  
+  # Deployment configuration
+  STAGING_URL: "https://staging.your-domain.com"
+  PRODUCTION_URL: "https://your-domain.com"
+
+jobs:
+  # Determine deployment environment
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+      should_deploy: ${{ steps.env.outputs.should_deploy }}
+      app_version: ${{ steps.env.outputs.app_version }}
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Determine Environment"
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/develop" ]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/heads/release/* ]]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "environment=none" >> $GITHUB_OUTPUT
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Generate version
+          VERSION=$(date +%Y%m%d)-${GITHUB_SHA::7}
+          echo "app_version=$VERSION" >> $GITHUB_OUTPUT
+
+  # Build and Package
+  build:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should_deploy == 'true'
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci --production
+        
+      - name: "Build Application"
+        run: |
+          npm run build
+          
+      - name: "Create Deployment Package"
+        run: |
+          npm run package
+          
+      - name: "Upload Build Artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-package
+          path: |
+            dist/
+            build/
+            package*.json
+            
+  # Build Docker Image
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [setup, build]
+    if: needs.setup.outputs.should_deploy == 'true'
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Set up Docker Buildx"
+        uses: docker/setup-buildx-action@v3
+        
+      - name: "Login to Container Registry"
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          
+      - name: "Build and Push Docker Image"
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.PROJECT_NAME }}:${{ needs.setup.outputs.app_version }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.PROJECT_NAME }}:latest-${{ needs.setup.outputs.environment }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.setup.outputs.app_version }}
+            ENVIRONMENT=${{ needs.setup.outputs.environment }}
+
+  # Security Scanning
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: [setup, docker-build]
+    if: needs.setup.outputs.should_deploy == 'true'
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Container Security Scan"
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.PROJECT_NAME }}:${{ needs.setup.outputs.app_version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          
+      - name: "Upload Security Scan Results"
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+          
+      - name: "Infrastructure Security Scan"
+        run: |
+          # Add infrastructure security scanning
+          echo "Scanning infrastructure configuration..."
+          # Example: checkov, tfsec, etc.
+
+  # Deploy to Staging
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [setup, build, docker-build, security-scan]
+    if: needs.setup.outputs.should_deploy == 'true' && (needs.setup.outputs.environment == 'staging' || needs.setup.outputs.environment == 'production')
+    environment: 
+      name: staging
+      url: ${{ env.STAGING_URL }}
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Download Deployment Package"
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-package
+          path: ./package/
+          
+      - name: "Deploy to Staging"
+        run: |
+          # Replace with your deployment method
+          echo "Deploying to staging environment..."
+          
+          # Example: Kubernetes deployment
+          # kubectl set image deployment/${{ env.PROJECT_NAME }} app=${{ env.DOCKER_REGISTRY }}/${{ env.PROJECT_NAME }}:${{ needs.setup.outputs.app_version }}
+          
+          # Example: Cloud platform deployment
+          # az webapp deployment source config-zip --src package.zip --name ${{ env.PROJECT_NAME }}-staging
+          
+          # Example: Docker deployment
+          # docker run -d --name ${{ env.PROJECT_NAME }}-staging -p 3000:3000 ${{ env.DOCKER_REGISTRY }}/${{ env.PROJECT_NAME }}:${{ needs.setup.outputs.app_version }}
+          
+      - name: "Wait for Deployment"
+        run: |
+          echo "Waiting for deployment to be ready..."
+          sleep 30
+          
+      - name: "Health Check"
+        run: |
+          # Check if the application is healthy
+          curl -f ${{ env.STAGING_URL }}/health || exit 1
+          
+      - name: "Notify Staging Deployment"
+        run: |
+          echo "✅ Staging deployment successful!"
+          # Add notification logic here
+
+  # Run Deployment Tests
+  deployment-tests:
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-staging]
+    if: needs.setup.outputs.should_deploy == 'true'
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_DEFAULT_VERSION }}
+          cache: 'npm'
+          
+      - name: "Install Dependencies"
+        run: npm ci
+        
+      - name: "Run Smoke Tests"
+        run: |
+          npm run test:smoke
+        env:
+          TEST_URL: ${{ env.STAGING_URL }}
+          
+      - name: "Run Integration Tests"
+        run: |
+          npm run test:integration
+        env:
+          TEST_URL: ${{ env.STAGING_URL }}
+          
+      - name: "Run Security Tests"
+        run: |
+          # Example: OWASP ZAP scan
+          docker run -v $(pwd):/zap/wrk/:rw -t owasp/zap2docker-stable zap-baseline.py -t ${{ env.STAGING_URL }}
+          
+      - name: "Run Performance Tests"
+        run: |
+          npm run test:performance
+        env:
+          TEST_URL: ${{ env.STAGING_URL }}
+
+  # Production Deployment Gate
+  production-gate:
+    runs-on: ubuntu-latest
+    needs: [setup, deployment-tests]
+    if: needs.setup.outputs.should_deploy == 'true' && needs.setup.outputs.environment == 'production'
+    environment: 
+      name: production-gate
+    steps:
+      - name: "Manual Approval Required"
+        run: |
+          echo "🚪 Production deployment gate - manual approval required"
+          
+      - name: "Deployment Checklist"
+        run: |
+          echo "✅ All tests passed"
+          echo "✅ Security scans completed"
+          echo "✅ Staging deployment successful"
+          echo "🚀 Ready for production deployment"
+
+  # Deploy to Production
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [setup, production-gate]
+    if: needs.setup.outputs.should_deploy == 'true' && needs.setup.outputs.environment == 'production'
+    environment: 
+      name: production
+      url: ${{ env.PRODUCTION_URL }}
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        
+      - name: "Download Deployment Package"
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-package
+          path: ./package/
+          
+      - name: "Blue-Green Deployment"
+        run: |
+          echo "🔄 Starting blue-green deployment..."
+          
+          # Deploy to green environment
+          echo "Deploying to green environment..."
+          
+          # Health check on green
+          echo "Health checking green environment..."
+          
+          # Switch traffic to green
+          echo "Switching traffic to green..."
+          
+          # Keep blue as backup
+          echo "Keeping blue environment as backup..."
+          
+      - name: "Post-Deployment Verification"
+        run: |
+          # Verify production deployment
+          curl -f ${{ env.PRODUCTION_URL }}/health || exit 1
+          
+          # Run critical path tests
+          npm run test:critical-path
+        env:
+          TEST_URL: ${{ env.PRODUCTION_URL }}
+          
+      - name: "Update Monitoring"
+        run: |
+          # Update monitoring dashboards
+          echo "Updating monitoring for version ${{ needs.setup.outputs.app_version }}"
+          
+      - name: "Notify Production Deployment"
+        run: |
+          echo "🚀 Production deployment successful!"
+          # Add notification logic here (Slack, Teams, etc.)
+
+  # Rollback on Failure
+  rollback:
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-production]
+    if: failure() && needs.setup.outputs.environment == 'production'
+    environment: 
+      name: production
+    steps:
+      - name: "Automatic Rollback"
+        run: |
+          echo "🔙 Initiating automatic rollback..."
+          
+          # Switch traffic back to blue environment
+          echo "Switching traffic back to previous version..."
+          
+          # Verify rollback
+          curl -f ${{ env.PRODUCTION_URL }}/health || exit 1
+          
+      - name: "Notify Rollback"
+        run: |
+          echo "⚠️ Rollback completed due to deployment failure"
+          # Add notification logic here
+
+  # Cleanup
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-production]
+    if: always() && needs.setup.outputs.should_deploy == 'true'
+    steps:
+      - name: "Cleanup Old Versions"
+        run: |
+          echo "🧹 Cleaning up old deployment artifacts..."
+          
+          # Keep last 5 versions
+          echo "Keeping last 5 versions, removing older ones..."
+          
+      - name: "Update Documentation"
+        run: |
+          echo "📚 Updating deployment documentation..."
+          
+          # Update changelog
+          echo "Version ${{ needs.setup.outputs.app_version }} deployed to ${{ needs.setup.outputs.environment }}" >> CHANGELOG.md
+          
+      - name: "Deployment Summary"
+        run: |
+          echo "📊 Deployment Summary:"
+          echo "- Version: ${{ needs.setup.outputs.app_version }}"
+          echo "- Environment: ${{ needs.setup.outputs.environment }}"
+          echo "- Status: ${{ job.status }}"
+          echo "- Timestamp: $(date)"
