@@ -457,3 +457,36 @@ ctf:
   showFlagsInNotifications: false
   showCountryDetailsInNotifications: none # Options: none  name  flag  both
   countryMapping: ~
+
+chaos:
+  enabled: false
+  gremlin:
+    teamId: ""
+    apiKey: ""
+    apiUrl: "https://api.gremlin.com/v1"
+  experiments:
+    - name: "database-outage"
+      description: "Simulates a database connection failure"
+      enabled: false
+      duration: 60
+      targetService: "sqlite"
+      type: "state"
+      args:
+        blackhole: true
+    - name: "api-latency"
+      description: "Adds latency to API responses"
+      enabled: false
+      duration: 30
+      targetService: "http"
+      type: "latency"
+      args:
+        latency: 1000
+        jitter: 500
+    - name: "memory-load"
+      description: "Simulates memory pressure"
+      enabled: false
+      duration: 60
+      targetService: "memory"
+      type: "resource"
+      args:
+        percent: 80
