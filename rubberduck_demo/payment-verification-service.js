@@ -15,10 +15,11 @@ class PaymentVerificationService extends EventEmitter {
   constructor() {
     super();
     this.app = express();
-    const configuredPort = Number.parseInt(process.env.PAYMENT_VERIFICATION_PORT, 10);
-    this.port = Number.isNaN(configuredPort) ? 3002 : configuredPort;
+    const parsedPort = Number.parseInt(process.env.PAYMENT_VERIFICATION_PORT, 10);
+    this.port = Number.isNaN(parsedPort) ? 3002 : parsedPort;
     this.paymentServiceUrl = process.env.PAYMENT_SERVICE_URL || 'http://localhost:3001';
     this.juiceShopUrl = process.env.JUICE_SHOP_URL || 'http://localhost:3000';
+    this.identifierPattern = /^[A-Za-z0-9_-]{1,64}$/;
     this.allowedOrigins = this.parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
     this.allowedPaymentStatuses = new Set(['pending', 'completed', 'failed', 'refunded']);
     this.allowedNotificationTargets = new Set(['email', 'sms', 'webhook']);
@@ -49,7 +50,7 @@ class PaymentVerificationService extends EventEmitter {
     }));
     // Keep request bodies small because verification payloads only contain identifiers and metadata.
     this.app.use(bodyParser.json({ limit: '100kb' }));
-    this.app.use(bodyParser.urlencoded({ extended: false, limit: '10kb' }));
+    this.app.use(bodyParser.urlencoded({ extended: false, limit: '100kb' }));
     
     // Log basic request metadata for troubleshooting and auditability.
     this.app.use((req, res, next) => {
@@ -90,7 +91,7 @@ class PaymentVerificationService extends EventEmitter {
     try {
       const requestBody = req.body ?? {};
       const { transactionId, orderId, expectedAmount } = requestBody;
-      const hasExpectedAmount = Object.prototype.hasOwnProperty.call(requestBody, 'expectedAmount');
+      const hasExpectedAmount = Object.hasOwn(requestBody, 'expectedAmount');
 
       if (!transactionId) {
         return res.status(400).json({
@@ -155,7 +156,7 @@ class PaymentVerificationService extends EventEmitter {
         .catch(error => {
           console.error(`Verification error: ${verificationId} (${transactionId})`, error);
           verification.status = 'error';
-          verification.issues.push('Verification process failed');
+          verification.issues.push('Verification process failed (background task error)');
           verification.completedAt = new Date().toISOString();
           this.emit('verification_error', { verificationId, error: error.message });
         });
@@ -249,7 +250,7 @@ class PaymentVerificationService extends EventEmitter {
     } catch (error) {
       console.error(`Error performing verification for ${verification.id} (${verification.transactionId}):`, error);
       verification.status = 'error';
-      verification.issues.push('Verification process error');
+      verification.issues.push('Verification process failed (execution error)');
       verification.result = 'error';
       verification.completedAt = new Date().toISOString();
       throw error;
@@ -649,7 +650,7 @@ class PaymentVerificationService extends EventEmitter {
 
   // Accept short identifier values that are safe to log, cache and embed in URLs.
   isValidIdentifier(value) {
-    return typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+    return typeof value === 'string' && this.identifierPattern.test(value);
   }
 
   // Parse an optional amount and reject negative or non-numeric values.
