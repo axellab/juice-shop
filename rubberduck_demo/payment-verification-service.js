@@ -15,7 +15,8 @@ class PaymentVerificationService extends EventEmitter {
   constructor() {
     super();
     this.app = express();
-    this.port = Number.parseInt(process.env.PAYMENT_VERIFICATION_PORT, 10) || 3002;
+    const configuredPort = Number.parseInt(process.env.PAYMENT_VERIFICATION_PORT, 10);
+    this.port = Number.isNaN(configuredPort) ? 3002 : configuredPort;
     this.paymentServiceUrl = process.env.PAYMENT_SERVICE_URL || 'http://localhost:3001';
     this.juiceShopUrl = process.env.JUICE_SHOP_URL || 'http://localhost:3000';
     this.allowedOrigins = this.parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
@@ -152,7 +153,7 @@ class PaymentVerificationService extends EventEmitter {
           this.emit('verification_completed', verification);
         })
         .catch(error => {
-          console.error(`Verification error: ${verificationId}`, error);
+          console.error(`Verification error: ${verificationId} (${transactionId})`, error);
           verification.status = 'error';
           verification.issues.push('Verification process failed');
           verification.completedAt = new Date().toISOString();
@@ -246,7 +247,7 @@ class PaymentVerificationService extends EventEmitter {
       
       return verification;
     } catch (error) {
-      console.error(`Error performing verification for ${verification.id}:`, error);
+      console.error(`Error performing verification for ${verification.id} (${verification.transactionId}):`, error);
       verification.status = 'error';
       verification.issues.push('Verification process error');
       verification.result = 'error';
