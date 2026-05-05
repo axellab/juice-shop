@@ -23,6 +23,7 @@ class PaymentVerificationService extends EventEmitter {
     this.allowedOrigins = this.parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
     this.allowedPaymentStatuses = new Set(['pending', 'completed', 'failed', 'refunded']);
     this.allowedNotificationTargets = new Set(['email', 'sms', 'webhook']);
+    this.maxBodySize = '100kb';
     this.requestTimeoutMs = 5000;
     
     // Store verification records in memory while they are processed or queried.
@@ -49,8 +50,8 @@ class PaymentVerificationService extends EventEmitter {
       credentials: true
     }));
     // Keep request bodies small because verification payloads only contain identifiers and metadata.
-    this.app.use(bodyParser.json({ limit: '100kb' }));
-    this.app.use(bodyParser.urlencoded({ extended: false, limit: '100kb' }));
+    this.app.use(bodyParser.json({ limit: this.maxBodySize }));
+    this.app.use(bodyParser.urlencoded({ extended: false, limit: this.maxBodySize }));
     
     // Log basic request metadata for troubleshooting and auditability.
     this.app.use((req, res, next) => {
@@ -156,7 +157,7 @@ class PaymentVerificationService extends EventEmitter {
         .catch(error => {
           console.error(`Verification error: ${verificationId} (${transactionId})`, error);
           verification.status = 'error';
-          verification.issues.push('Verification process failed (background task error)');
+          verification.issues.push(`Verification process failed (background task error: ${verificationId})`);
           verification.completedAt = new Date().toISOString();
           this.emit('verification_error', { verificationId, error: error.message });
         });
@@ -250,7 +251,7 @@ class PaymentVerificationService extends EventEmitter {
     } catch (error) {
       console.error(`Error performing verification for ${verification.id} (${verification.transactionId}):`, error);
       verification.status = 'error';
-      verification.issues.push('Verification process failed (execution error)');
+      verification.issues.push(`Verification process failed (execution error: ${verification.id})`);
       verification.result = 'error';
       verification.completedAt = new Date().toISOString();
       throw error;
