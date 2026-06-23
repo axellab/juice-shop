@@ -1,0 +1,340 @@
+name: "Daily Security Review"
+
+# Runs every day at 21:00 America/Bogota (UTC-5) = 02:00 UTC
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  security-events: write
+
+env:
+  NODE_VERSION: '20'
+  REPORT_DIR: devsecops
+
+jobs:
+  security-review:
+    name: Security Code Review
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      # ── 2. Runtime setup ───────────────────────────────────────────────────
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install application dependencies
+        # --ignore-scripts is intentional: prevents running arbitrary lifecycle
+        # scripts during CI installation, which is a security best practice.
+        run: npm install --ignore-scripts
+
+      - name: Install Retire.js
+        run: npm install --global retire
+
+      # ── 3. npm audit ───────────────────────────────────────────────────────
+      - name: Run npm audit
+        run: npm audit --json > /tmp/npm-audit.json 2>&1 || true
+
+      # ── 4. ESLint security scan ────────────────────────────────────────────
+      - name: Run ESLint security scan
+        run: |
+          npx eslint . \
+            --ext .ts,.js \
+            --format json \
+            --output-file /tmp/eslint-report.json \
+            --no-eslintrc \
+            --rule '{"no-eval":"error","no-implied-eval":"error","no-new-func":"error","no-script-url":"error"}' \
+            || true
+
+      # ── 5. Retire.js ───────────────────────────────────────────────────────
+      - name: Run Retire.js
+        run: |
+          retire \
+            --outputformat json \
+            --outputpath /tmp/retire-report.json \
+            --path . \
+            --ignorefile .retireignore 2>/dev/null \
+            || retire \
+              --outputformat json \
+              --outputpath /tmp/retire-report.json \
+              --path . \
+              || true
+
+      # ── 6. Generate Markdown report ────────────────────────────────────────
+      - name: Generate Markdown report
+        id: generate_report
+        env:
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os, sys
+          from datetime import datetime, timezone, timedelta
+          from pathlib import Path
+
+          # Truncation limits for table columns (characters)
+          MAX_VIA_LENGTH     = 80
+          MAX_MESSAGE_LENGTH = 80
+
+          # Timezone: America/Bogota (UTC-5)
+          BOG = timezone(timedelta(hours=-5))
+          now = datetime.now(BOG)
+          report_date = now.strftime("%Y-%m-%d")
+          report_ts   = now.strftime("%Y-%m-%d %H:%M:%S UTC-5")
+
+          report_dir  = os.environ.get("REPORT_DIR", "devsecops")
+          repository  = os.environ.get("REPOSITORY", "")
+          branch      = os.environ.get("BRANCH", "")
+          event       = os.environ.get("EVENT", "")
+          server_url  = os.environ.get("SERVER_URL", "https://github.com")
+          workflow_url = f"{server_url}/{repository}/actions/workflows/daily-security-review.yml"
+
+          # ── Parse npm audit ────────────────────────────────────────────────
+          npm_data = {}
+          npm_counts = {"critical": 0, "high": 0, "moderate": 0, "low": 0, "info": 0}
+          try:
+              with open("/tmp/npm-audit.json") as f:
+                  npm_data = json.load(f)
+              vulns = npm_data.get("vulnerabilities", {})
+              for v in vulns.values():
+                  sev = v.get("severity", "").lower()
+                  if sev in npm_counts:
+                      npm_counts[sev] += 1
+          except Exception as e:
+              print(f"[WARN] npm audit parse error: {e}", file=sys.stderr)
+
+          npm_total = sum(npm_counts.values())
+
+          # ── Parse ESLint ───────────────────────────────────────────────────
+          eslint_data = []
+          eslint_errors = 0
+          eslint_warnings = 0
+          try:
+              with open("/tmp/eslint-report.json") as f:
+                  eslint_raw = json.load(f)
+              for file_result in eslint_raw:
+                  eslint_errors   += file_result.get("errorCount", 0)
+                  eslint_warnings += file_result.get("warningCount", 0)
+                  if file_result.get("errorCount", 0) > 0 or file_result.get("warningCount", 0) > 0:
+                      eslint_data.append({
+                          "file": file_result.get("filePath", ""),
+                          "errors":   file_result.get("errorCount", 0),
+                          "warnings": file_result.get("warningCount", 0),
+                          "messages": [
+                              {"rule": m.get("ruleId"), "message": m.get("message"), "line": m.get("line")}
+                              for m in file_result.get("messages", [])[:10]
+                          ],
+                      })
+          except Exception as e:
+              print(f"[WARN] ESLint parse error: {e}", file=sys.stderr)
+
+          # ── Parse Retire.js ────────────────────────────────────────────────
+          retire_data = []
+          retire_total = 0
+          try:
+              with open("/tmp/retire-report.json") as f:
+                  retire_raw = json.load(f)
+              if isinstance(retire_raw, list):
+                  retire_data  = retire_raw[:30]
+                  retire_total = len(retire_raw)
+              elif isinstance(retire_raw, dict):
+                  retire_data  = [retire_raw]
+                  retire_total = 1
+          except Exception as e:
+              print(f"[WARN] Retire.js parse error: {e}", file=sys.stderr)
+
+          # ── Risk level ─────────────────────────────────────────────────────
+          if npm_counts["critical"] > 0:
+              risk = "🔴 CRITICAL"
+          elif npm_counts["high"] > 0:
+              risk = "🟠 HIGH"
+          elif npm_counts["moderate"] > 0 or eslint_errors > 0 or retire_total > 0:
+              risk = "🟡 MODERATE"
+          else:
+              risk = "🟢 LOW"
+
+          # ── Recommendations ────────────────────────────────────────────────
+          recs = []
+          if npm_counts["critical"] > 0 or npm_counts["high"] > 0:
+              recs.append(
+                  f"- ⚠️  **Immediate action required**: {npm_counts['critical']} critical and "
+                  f"{npm_counts['high']} high severity dependency vulnerabilities found. "
+                  "Run `npm audit fix` or update the affected packages."
+              )
+          if npm_counts["moderate"] > 0:
+              recs.append(
+                  f"- 🔔 {npm_counts['moderate']} moderate severity dependency vulnerabilities found. "
+                  "Schedule an update in the next sprint."
+              )
+          if npm_counts["low"] > 0:
+              recs.append(
+                  f"- ℹ️  {npm_counts['low']} low severity dependency vulnerabilities found. "
+                  "Track and address as part of regular maintenance."
+              )
+          if eslint_errors > 0:
+              recs.append(
+                  f"- 🔔 {eslint_errors} ESLint security rule violations found. "
+                  "Review and fix insecure code patterns (eval, implied-eval, new Function, script-url)."
+              )
+          if retire_total > 0:
+              recs.append(
+                  f"- ⚠️  {retire_total} vulnerable library/libraries detected by Retire.js. "
+                  "Update to patched versions."
+              )
+          if not recs:
+              recs.append(
+                  "- ✅ No significant security issues found. "
+                  "Continue regular dependency updates and code reviews."
+              )
+
+          # ── Vulnerability detail table ─────────────────────────────────────
+          vuln_rows = []
+          vulns = npm_data.get("vulnerabilities", {})
+          for name, info in list(vulns.items())[:50]:
+              sev   = info.get("severity", "-")
+              via   = ", ".join(
+                  v if isinstance(v, str) else v.get("title", "")
+                  for v in info.get("via", [])
+              )[:MAX_VIA_LENGTH]
+              fix   = "✅ Yes" if info.get("fixAvailable") else "❌ No"
+              vuln_rows.append(f"| `{name}` | {sev} | {via} | {fix} |")
+
+          vuln_table = ""
+          if vuln_rows:
+              vuln_table = (
+                  "| Package | Severity | Via | Fix available |\n"
+                  "|---|---|---|---|\n"
+                  + "\n".join(vuln_rows)
+              )
+          else:
+              vuln_table = "_No vulnerabilities found._"
+
+          # ── ESLint detail table ────────────────────────────────────────────
+          cwd = Path(os.getcwd())
+          eslint_rows = []
+          for item in eslint_data[:30]:
+              try:
+                  fname = str(Path(item["file"]).relative_to(cwd))
+              except ValueError:
+                  fname = item["file"]
+              for msg in item["messages"]:
+                  rule = msg.get("rule") or "-"
+                  text = (msg.get("message") or "")[:MAX_MESSAGE_LENGTH]
+                  line = msg.get("line") or "-"
+                  eslint_rows.append(f"| `{fname}` | {line} | `{rule}` | {text} |")
+
+          eslint_table = ""
+          if eslint_rows:
+              eslint_table = (
+                  "| File | Line | Rule | Message |\n"
+                  "|---|---|---|---|\n"
+                  + "\n".join(eslint_rows)
+              )
+          else:
+              eslint_table = "_No ESLint security violations found._"
+
+          # ── Retire.js detail ───────────────────────────────────────────────
+          retire_detail = "_No vulnerable libraries found._"
+          if retire_data:
+              retire_detail = f"```json\n{json.dumps(retire_data, indent=2)}\n```"
+
+          # ── Assemble report ────────────────────────────────────────────────
+          report = f"""# Security Review Report
+
+| Field | Value |
+|---|---|
+| **Date** | {report_date} |
+| **Generated at** | {report_ts} |
+| **Repository** | {repository} |
+| **Branch** | {branch} |
+| **Triggered by** | {event} |
+| **Overall risk** | {risk} |
+
+---
+
+## 1. Executive Summary
+
+| Tool | Findings |
+|---|---|
+| npm audit – Critical | {npm_counts['critical']} |
+| npm audit – High | {npm_counts['high']} |
+| npm audit – Moderate | {npm_counts['moderate']} |
+| npm audit – Low | {npm_counts['low']} |
+| ESLint security errors | {eslint_errors} |
+| ESLint security warnings | {eslint_warnings} |
+| Retire.js vulnerable libs | {retire_total} |
+
+---
+
+## 2. Dependency Audit (npm audit)
+
+{vuln_table}
+
+---
+
+## 3. Static Code Analysis (ESLint)
+
+{eslint_table}
+
+---
+
+## 4. Known Vulnerable Libraries (Retire.js)
+
+{retire_detail}
+
+---
+
+## 5. Recommendations
+
+{chr(10).join(recs)}
+
+---
+
+*Report generated automatically by the [Daily Security Review]({workflow_url}) workflow.*
+"""
+
+          Path(report_dir).mkdir(parents=True, exist_ok=True)
+          report_path = Path(report_dir) / f"security-report-{report_date}.md"
+          report_path.write_text(report, encoding="utf-8")
+          print(f"Report written to {report_path}")
+
+          # Write GitHub Actions outputs
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"report_file={report_path}\n")
+              out.write(f"report_date={report_date}\n")
+              out.write(f"risk={risk}\n")
+          PYEOF
+
+      # ── 7. Commit report to repository ─────────────────────────────────────
+      - name: Commit security report
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${{ env.REPORT_DIR }}/"
+          if git diff --cached --quiet; then
+            echo "Report is already up-to-date – nothing to commit."
+          else
+            git commit -m "security: daily report ${{ steps.generate_report.outputs.report_date }} [${{ steps.generate_report.outputs.risk }}]"
+            git push
+          fi
+
+      # ── 8. Job summary ─────────────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          echo "## 🔒 Daily Security Review – ${{ steps.generate_report.outputs.report_date }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Overall risk:** ${{ steps.generate_report.outputs.risk }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Report saved to \`${{ steps.generate_report.outputs.report_file }}\`." >> "$GITHUB_STEP_SUMMARY"
